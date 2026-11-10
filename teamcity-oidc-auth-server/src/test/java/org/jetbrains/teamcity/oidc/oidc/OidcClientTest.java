@@ -95,7 +95,7 @@ public class OidcClientTest {
                         "}")));
 
         OidcTokenResponse resp = client.exchangeCodeForTokens(
-                baseUrl + "/token", "mycode", "http://localhost/callback", "client-id", "secret");
+                baseUrl + "/token", "mycode", "http://localhost/callback", "client-id", "secret", "test-verifier");
 
         assertEquals("at-123", resp.getAccessToken());
         assertEquals("it-456", resp.getIdToken());
@@ -105,7 +105,8 @@ public class OidcClientTest {
         wireMock.verify(postRequestedFor(urlEqualTo("/token"))
                 .withRequestBody(containing("grant_type=authorization_code"))
                 .withRequestBody(containing("code=mycode"))
-                .withRequestBody(containing("client_id=client-id")));
+                .withRequestBody(containing("client_id=client-id"))
+                .withRequestBody(containing("code_verifier=test-verifier")));
     }
 
     @Test(expected = OidcClientException.class)
@@ -116,7 +117,7 @@ public class OidcClientTest {
                         .withBody("{\"error\":\"invalid_client\",\"error_description\":\"Client authentication failed\"}")));
 
         client.exchangeCodeForTokens(
-                baseUrl + "/token", "code", "http://localhost/cb", "bad-client", "bad-secret");
+                baseUrl + "/token", "code", "http://localhost/cb", "bad-client", "bad-secret", "test-verifier");
     }
 
     @Test
@@ -127,7 +128,7 @@ public class OidcClientTest {
                         .withBody("{\"error\":\"invalid_grant\"}")));
 
         try {
-            client.exchangeCodeForTokens(baseUrl + "/token", "code", "http://localhost/cb", "c", "s");
+            client.exchangeCodeForTokens(baseUrl + "/token", "code", "http://localhost/cb", "c", "s", "test-verifier");
             fail("Expected OidcClientException");
         } catch (OidcClientException e) {
             assertEquals("invalid_grant", e.getIdpError());

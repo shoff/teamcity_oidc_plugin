@@ -93,42 +93,13 @@
         </td>
       </tr>
 
-      <tr>
-        <th><label for="createUsersAutomatically">Auto-create users:</label></th>
-        <td>
-          <forms:checkbox name="createUsersAutomatically" checked="${settings.createUsersAutomatically}"/>
-          <label for="createUsersAutomatically">Automatically create a TeamCity user on first OIDC login</label>
-        </td>
-      </tr>
+      <tr><th>Account policy:</th><td>Existing TeamCity users only. Group membership is managed in TeamCity.</td></tr>
 
       <tr>
         <th><label for="allowedEmailDomains">Allowed email domains:</label></th>
         <td>
           <forms:textField name="allowedEmailDomains" value="${settings.allowedEmailDomainsJoined}" className="longField"/>
           <span class="smallNote">Comma-separated list of allowed email domains. Leave empty to allow all domains.</span>
-        </td>
-      </tr>
-
-      <tr>
-        <th><label for="assignGroups">Group sync:</label></th>
-        <td>
-          <forms:checkbox name="assignGroups" checked="${settings.assignGroups}"/>
-          <label for="assignGroups">Sync group membership from OIDC claims</label>
-        </td>
-      </tr>
-
-      <tr>
-        <th><label for="removeUnassignedGroups">Remove from absent groups:</label></th>
-        <td>
-          <forms:checkbox name="removeUnassignedGroups" checked="${settings.removeUnassignedGroups}"/>
-          <label for="removeUnassignedGroups">Remove user from TeamCity groups not present in the OIDC claim</label>
-        </td>
-      </tr>
-
-      <tr>
-        <th><label for="groupsClaimName">Groups claim name:</label></th>
-        <td>
-          <forms:textField name="groupsClaimName" value="${settings.groupsClaimName}"/>
         </td>
       </tr>
 

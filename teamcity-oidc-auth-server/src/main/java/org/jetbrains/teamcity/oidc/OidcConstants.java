@@ -26,6 +26,7 @@ public final class OidcConstants {
 
     // UserEx attribute key used to persist the OIDC subject identifier on the TC user record
     public static final String OIDC_SUB_ATTRIBUTE = "oidc.sub";
+    public static final String OIDC_ISSUER_ATTRIBUTE = "oidc.issuer";
 
     // Config file name (relative to TeamCity config directory)
     public static final String CONFIG_FILE_NAME = "oidc-auth.json";
@@ -33,6 +34,7 @@ public final class OidcConstants {
     // HTTP session attribute keys
     public static final String SESSION_STATE        = "oidc.state";
     public static final String SESSION_NONCE        = "oidc.nonce";
+    public static final String SESSION_CODE_VERIFIER = "oidc.codeVerifier";
     public static final String SESSION_REDIRECT_URL = "oidc.redirectUrl";
     // Stored at login to support per-request token introspection (opt-in via feature flag)
     public static final String SESSION_ACCESS_TOKEN = "oidc.access.token";

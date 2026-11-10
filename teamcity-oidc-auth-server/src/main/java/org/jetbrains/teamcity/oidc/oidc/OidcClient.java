@@ -74,11 +74,13 @@ public class OidcClient {
             @NotNull String code,
             @NotNull String redirectUri,
             @NotNull String clientId,
-            @NotNull String clientSecret) throws OidcClientException {
+            @NotNull String clientSecret,
+            @NotNull String codeVerifier) throws OidcClientException {
         Loggers.AUTH.debug("OIDC: exchanging authorization code at " + tokenEndpoint);
         Map<String, String> form = new LinkedHashMap<>();
         form.put("grant_type", "authorization_code");
         form.put("code", code);
+        form.put("code_verifier", codeVerifier);
         form.put("redirect_uri", redirectUri);
         form.put("client_id", clientId);
         form.put("client_secret", clientSecret);

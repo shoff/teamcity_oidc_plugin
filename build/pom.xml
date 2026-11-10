@@ -10,9 +10,9 @@
   <packaging>pom</packaging>
   <properties>
       <maven.build.timestamp.format>yyyyMMddHHmmss</maven.build.timestamp.format>
-      <teamcity.oidc.auth.plugin.version>snapshot-${maven.build.timestamp}</teamcity.oidc.auth.plugin.version>
-      <teamcity.oidc.auth.plugin.vendorName>JetBrains</teamcity.oidc.auth.plugin.vendorName>
-      <teamcity.oidc.auth.plugin.vendorUrl>https://www.jetbrains.com/</teamcity.oidc.auth.plugin.vendorUrl>
+      <teamcity.oidc.auth.plugin.version>duende-${maven.build.timestamp}</teamcity.oidc.auth.plugin.version>
+      <teamcity.oidc.auth.plugin.vendorName>Custom integration (based on JetBrains OIDC)</teamcity.oidc.auth.plugin.vendorName>
+      <teamcity.oidc.auth.plugin.vendorUrl>https://github.com/JetBrains/teamcity-oidc-auth-plugin</teamcity.oidc.auth.plugin.vendorUrl>
   </properties>
   <dependencies>
       <dependency>

@@ -6,6 +6,9 @@ import org.jetbrains.teamcity.oidc.OidcConstants;
 
 import javax.servlet.http.HttpSession;
 import java.security.SecureRandom;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 
 /**
@@ -54,6 +57,34 @@ public class OidcStateManager {
         Object nonce = session.getAttribute(OidcConstants.SESSION_NONCE);
         session.removeAttribute(OidcConstants.SESSION_NONCE);
         return nonce != null ? nonce.toString() : null;
+    }
+
+    /** Store a 256-bit verifier in this session and return its S256 challenge. */
+    @NotNull
+    public String generateCodeChallenge(@NotNull HttpSession session) {
+        byte[] bytes = new byte[32];
+        RANDOM.nextBytes(bytes);
+        String verifier = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+        session.setAttribute(OidcConstants.SESSION_CODE_VERIFIER, verifier);
+        return codeChallenge(verifier);
+    }
+
+    @Nullable
+    public String consumeCodeVerifier(@NotNull HttpSession session) {
+        Object verifier = session.getAttribute(OidcConstants.SESSION_CODE_VERIFIER);
+        session.removeAttribute(OidcConstants.SESSION_CODE_VERIFIER);
+        return verifier instanceof String ? (String) verifier : null;
+    }
+
+    @NotNull
+    public static String codeChallenge(@NotNull String verifier) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(verifier.getBytes(StandardCharsets.US_ASCII));
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(digest);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is required by the Java platform", e);
+        }
     }
 
     private static String randomToken() {

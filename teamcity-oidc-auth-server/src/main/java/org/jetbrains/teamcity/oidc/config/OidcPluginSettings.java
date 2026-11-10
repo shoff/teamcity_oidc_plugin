@@ -48,23 +48,14 @@ public class OidcPluginSettings {
     /** OAuth 2.0 scopes. Default: ["openid", "email", "profile"]. */
     private List<String> scopes = new ArrayList<>(OidcConstants.DEFAULT_SCOPES);
 
-    /** Auto-create TeamCity users on first OIDC login. Default false. */
-    private boolean createUsersAutomatically = true;
-
     /** If non-empty, only emails from these domains may log in. */
     private List<String> allowedEmailDomains = new ArrayList<>();
-
-    /** Sync user's TeamCity group membership from OIDC claims. Default false. */
-    private boolean assignGroups = false;
-
-    /** When true, remove user from TeamCity groups absent in the OIDC claim. Requires assignGroups=true. */
-    private boolean removeUnassignedGroups = false;
 
     /** JWT/userinfo claim that holds the group list. Default "groups". */
     private String groupsClaimName = OidcConstants.DEFAULT_GROUPS_CLAIM;
 
-    /** Claim mapping for TeamCity username. Default: SUB. */
-    private OidcClaimMappingSettings usernameClaim = defaultSub();
+    /** Claim mapping for TeamCity username. Default: CLAIM/preferred_username. */
+    private OidcClaimMappingSettings usernameClaim = defaultClaim("preferred_username");
 
     /** Claim mapping for user email. Default: CLAIM/email. */
     private OidcClaimMappingSettings emailClaim = defaultClaim("email");
@@ -89,12 +80,6 @@ public class OidcPluginSettings {
     private String loginButtonIconUrl;
 
     // ---- helpers -----------------------------------------------------------
-
-    private static OidcClaimMappingSettings defaultSub() {
-        OidcClaimMappingSettings s = new OidcClaimMappingSettings();
-        s.setMappingType(OidcClaimMappingSettings.MappingType.SUB);
-        return s;
-    }
 
     private static OidcClaimMappingSettings defaultClaim(String claimName) {
         OidcClaimMappingSettings s = new OidcClaimMappingSettings();
@@ -147,17 +132,19 @@ public class OidcPluginSettings {
     public List<String> getScopes() { return scopes; }
     public void setScopes(List<String> scopes) { this.scopes = scopes; }
 
-    public boolean isCreateUsersAutomatically() { return createUsersAutomatically; }
-    public void setCreateUsersAutomatically(boolean createUsersAutomatically) { this.createUsersAutomatically = createUsersAutomatically; }
+    /** Legacy JSON property: account creation is permanently disabled. */
+    public boolean isCreateUsersAutomatically() { return false; }
+    public void setCreateUsersAutomatically(boolean createUsersAutomatically) { /* Ignored: this variant never provisions accounts. */ }
 
     public List<String> getAllowedEmailDomains() { return allowedEmailDomains; }
     public void setAllowedEmailDomains(List<String> allowedEmailDomains) { this.allowedEmailDomains = allowedEmailDomains; }
 
-    public boolean isAssignGroups() { return assignGroups; }
-    public void setAssignGroups(boolean assignGroups) { this.assignGroups = assignGroups; }
+    /** Legacy JSON property: group synchronization is permanently disabled. */
+    public boolean isAssignGroups() { return false; }
+    public void setAssignGroups(boolean assignGroups) { /* Ignored: TeamCity owns group membership. */ }
 
-    public boolean isRemoveUnassignedGroups() { return removeUnassignedGroups; }
-    public void setRemoveUnassignedGroups(boolean removeUnassignedGroups) { this.removeUnassignedGroups = removeUnassignedGroups; }
+    public boolean isRemoveUnassignedGroups() { return false; }
+    public void setRemoveUnassignedGroups(boolean removeUnassignedGroups) { /* Ignored: TeamCity owns group membership. */ }
 
     public String getGroupsClaimName() { return groupsClaimName; }
     public void setGroupsClaimName(String groupsClaimName) { this.groupsClaimName = groupsClaimName; }

@@ -11,6 +11,17 @@
          <outputDirectory>/</outputDirectory>
      </file> 
   </files>
+  <fileSets>
+    <fileSet>
+      <directory>../docs</directory>
+      <outputDirectory>docs</outputDirectory>
+      <includes><include>duende-setup.md</include></includes>
+    </fileSet>
+    <fileSet>
+      <directory>../config-examples/duende</directory>
+      <outputDirectory>config-examples/duende</outputDirectory>
+    </fileSet>
+  </fileSets>
   <moduleSets>
     <moduleSet>
        <useAllReactorProjects>true</useAllReactorProjects>

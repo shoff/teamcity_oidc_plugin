@@ -2,9 +2,9 @@
 <teamcity-plugin xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:schemas-jetbrains-com:teamcity-plugin-v1-xml">
   <info>
     <name>teamcity-oidc-auth</name>
-    <display-name>OIDC / OAuth 2.0 Authentication</display-name>
+    <display-name>Duende IdentityServer Authentication</display-name>
     <version>@Version@</version>
-    <description>The plugin enables user authentication via OpenID Connect (OIDC) / OAuth 2.0 Authorization Code Flow.</description>
+    <description>Authenticate existing TeamCity users with Duende IdentityServer using OpenID Connect and S256 PKCE.</description>
     <vendor>
       <name>@VendorName@</name>
       <url>@VendorURL@</url>

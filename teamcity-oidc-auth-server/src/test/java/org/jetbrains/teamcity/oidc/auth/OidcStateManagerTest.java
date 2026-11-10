@@ -91,4 +91,22 @@ public class OidcStateManagerTest {
         }
         assertEquals(1000, states.size());
     }
+    @Test
+    public void pkceMatchesRfc7636Vector() {
+        assertEquals("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+                OidcStateManager.codeChallenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"));
+    }
+
+    @Test
+    public void pkceVerifierIsRandomSessionBoundAndSingleUse() {
+        MockHttpSession session = new MockHttpSession();
+        String challenge = manager.generateCodeChallenge(session);
+        assertNull(manager.consumeCodeVerifier(new MockHttpSession()));
+        String verifier = manager.consumeCodeVerifier(session);
+        assertTrue(verifier.matches("[A-Za-z0-9_-]{43,128}"));
+        assertEquals(OidcStateManager.codeChallenge(verifier), challenge);
+        assertNull(manager.consumeCodeVerifier(session));
+        assertNotEquals(challenge, manager.generateCodeChallenge(session));
+    }
+
 }

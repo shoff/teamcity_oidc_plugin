@@ -70,7 +70,7 @@ public class OidcPluginSettingsStorageImplTest {
 
         assertNotNull(settings);
         assertTrue(settings.isDiscoveryEnabled());
-        assertTrue(settings.isCreateUsersAutomatically());
+        assertFalse(settings.isCreateUsersAutomatically());
         assertNotNull(settings.getScopes());
         assertFalse(settings.getScopes().isEmpty());
     }
@@ -169,4 +169,14 @@ public class OidcPluginSettingsStorageImplTest {
 
         assertEquals("https://idp.example.com", settings.getIssuerUrl());
     }
+    @Test
+    public void legacyProvisioningFlagsCannotEnableAccountOrGroupChanges() throws Exception {
+        OidcPluginSettings s = new com.fasterxml.jackson.databind.ObjectMapper().readValue(
+                "{\"createUsersAutomatically\":true,\"assignGroups\":true,\"removeUnassignedGroups\":true}", OidcPluginSettings.class);
+        assertFalse(s.isCreateUsersAutomatically());
+        assertFalse(s.isAssignGroups());
+        assertFalse(s.isRemoveUnassignedGroups());
+        assertEquals("preferred_username", s.getUsernameClaim().getClaimName());
+    }
+
 }

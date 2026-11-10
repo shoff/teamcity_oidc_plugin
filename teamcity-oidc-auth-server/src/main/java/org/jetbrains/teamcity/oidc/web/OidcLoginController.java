@@ -84,6 +84,7 @@ public class OidcLoginController extends BaseController {
         // Generate and store state and nonce
         String state = stateManager.generateState(session);
         String nonce = stateManager.generateNonce(session);
+        String challenge = stateManager.generateCodeChallenge(session);
 
         // Build redirect URI
         String redirectUri = authenticationScheme.getCallbackUrl(settings);
@@ -100,7 +101,9 @@ public class OidcLoginController extends BaseController {
                 + "&redirect_uri=" + URLEncoder.encode(redirectUri, "UTF-8")
                 + "&scope=" + URLEncoder.encode(scopeStr, "UTF-8")
                 + "&state=" + URLEncoder.encode(state, "UTF-8")
-                + "&nonce=" + URLEncoder.encode(nonce, "UTF-8");
+                + "&nonce=" + URLEncoder.encode(nonce, "UTF-8")
+                + "&code_challenge=" + challenge
+                + "&code_challenge_method=S256";
 
         Loggers.AUTH.debug("OIDC: redirecting to authorization endpoint");
         response.sendRedirect(authUrl);

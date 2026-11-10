@@ -1,0 +1,14 @@
+{
+  "issuerUrl": "https://identity.example.com",
+  "clientId": "teamcity",
+  "clientSecret": "REPLACE_WITH_SECRET_FROM_YOUR_SECRET_STORE",
+  "scopes": ["openid", "profile", "email"],
+  "createUsersAutomatically": false,
+  "assignGroups": false,
+  "removeUnassignedGroups": false,
+  "usernameClaim": {
+    "mappingType": "CLAIM",
+    "claimName": "preferred_username"
+  },
+  "loginButtonLabel": "Sign in with IdentityServer"
+}

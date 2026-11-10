@@ -153,4 +153,16 @@ public class OidcLoginControllerTest {
         assertTrue("redirect_uri should fall back to RootUrlHolder: " + url,
                 url.contains("localhost%3A8111") || url.contains("localhost:8111"));
     }
+    @Test
+    public void authorizationRedirectCarriesS256ChallengeOnly() throws Exception {
+        MockHttpServletRequest req = new MockHttpServletRequest("GET", "/app/oidc/login");
+        req.setSession(new MockHttpSession());
+        String location = handle(req).getRedirectedUrl();
+        String verifier = stateManager.consumeCodeVerifier(req.getSession());
+        assertNotNull(verifier);
+        assertTrue(location.contains("code_challenge_method=S256"));
+        assertTrue(location.contains("code_challenge=" + OidcStateManager.codeChallenge(verifier)));
+        assertFalse(location.contains(verifier));
+    }
+
 }

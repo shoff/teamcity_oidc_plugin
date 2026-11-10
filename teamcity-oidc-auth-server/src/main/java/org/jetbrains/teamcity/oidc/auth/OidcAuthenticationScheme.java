@@ -4,16 +4,13 @@ import jetbrains.buildServer.RootUrlHolder;
 import jetbrains.buildServer.controllers.interceptors.auth.HttpAuthenticationResult;
 import jetbrains.buildServer.controllers.interceptors.auth.HttpAuthenticationSchemeAdapter;
 import jetbrains.buildServer.controllers.interceptors.auth.util.HttpAuthUtil;
-import jetbrains.buildServer.groups.SUserGroup;
 import jetbrains.buildServer.groups.UserGroupManager;
 import jetbrains.buildServer.log.LogUtil;
 import jetbrains.buildServer.log.Loggers;
-import jetbrains.buildServer.serverSide.TeamCityProperties;
 import jetbrains.buildServer.serverSide.auth.LoginConfiguration;
 import jetbrains.buildServer.serverSide.auth.ServerPrincipal;
 import jetbrains.buildServer.users.SUser;
 import jetbrains.buildServer.users.UserModelEx;
-import jetbrains.buildServer.users.impl.NewUserAccount;
 import jetbrains.buildServer.users.impl.UserEx;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -29,7 +26,6 @@ import javax.servlet.http.HttpSession;
 import java.io.IOException;
 import java.net.URLEncoder;
 import java.util.*;
-import java.util.stream.Collectors;
 
 public class OidcAuthenticationScheme extends HttpAuthenticationSchemeAdapter {
 
@@ -38,7 +34,6 @@ public class OidcAuthenticationScheme extends HttpAuthenticationSchemeAdapter {
     private final OidcIdTokenValidator tokenValidator;
     private final OidcStateManager stateManager;
     private final UserModelEx userModel;
-    private final UserGroupManager userGroupManager;
     private final RootUrlHolder rootUrlHolder;
 
     public OidcAuthenticationScheme(
@@ -55,7 +50,6 @@ public class OidcAuthenticationScheme extends HttpAuthenticationSchemeAdapter {
         this.tokenValidator = tokenValidator;
         this.stateManager = stateManager;
         this.userModel = userModel;
-        this.userGroupManager = userGroupManager;
         this.rootUrlHolder = rootUrlHolder;
 
         loginConfiguration.registerAuthModuleType(this);
@@ -146,6 +140,12 @@ public class OidcAuthenticationScheme extends HttpAuthenticationSchemeAdapter {
             throw new OidcAuthException("State parameter mismatch — possible CSRF attack");
         }
 
+        String nonce = stateManager.consumeNonce(session);
+        String codeVerifier = stateManager.consumeCodeVerifier(session);
+        if (nonce == null || nonce.isEmpty() || codeVerifier == null || codeVerifier.isEmpty()) {
+            throw new OidcAuthException("Login transaction is missing nonce or PKCE verifier");
+        }
+
         // 2. Resolve token endpoint
         String tokenEndpoint = resolveTokenEndpoint(settings);
 
@@ -154,7 +154,7 @@ public class OidcAuthenticationScheme extends HttpAuthenticationSchemeAdapter {
 
         // 4. Exchange code for tokens
         OidcTokenResponse tokenResponse = oidcClient.exchangeCodeForTokens(
-                tokenEndpoint, code, redirectUri, settings.getClientId(), settings.getClientSecret());
+                tokenEndpoint, code, redirectUri, settings.getClientId(), settings.getClientSecret(), codeVerifier);
 
         String rawIdToken = tokenResponse.getIdToken();
         if (rawIdToken == null || rawIdToken.isEmpty()) {
@@ -163,10 +163,13 @@ public class OidcAuthenticationScheme extends HttpAuthenticationSchemeAdapter {
 
         // 5. Validate ID token
         String jwksUri = resolveJwksUri(settings);
-        String nonce = stateManager.consumeNonce(session);
         OidcIdTokenClaims idTokenClaims = tokenValidator.validateAndDecode(
                 rawIdToken, jwksUri, settings.getIssuerUrl(),
                 settings.getClientId(), nonce, settings.getTokenClockSkewSeconds());
+
+        if (idTokenClaims.getSub() == null || idTokenClaims.getSub().trim().isEmpty()) {
+            throw new OidcAuthException("ID token missing subject");
+        }
 
         // 6. Optionally fetch userinfo for supplemental claims
         OidcUserInfo userInfo = null;
@@ -179,9 +182,13 @@ public class OidcAuthenticationScheme extends HttpAuthenticationSchemeAdapter {
             }
         }
 
+        if (userInfo != null && !idTokenClaims.getSub().equals(userInfo.getSub())) {
+            throw new OidcAuthException("UserInfo subject does not match ID token");
+        }
+
         // 7. Resolve TeamCity username
         String username = resolveUsername(settings, idTokenClaims, userInfo);
-        if (username == null || username.isEmpty()) {
+        if (username == null || username.trim().isEmpty()) {
             throw new OidcAuthException("Could not resolve a username from token claims");
         }
 
@@ -196,55 +203,26 @@ public class OidcAuthenticationScheme extends HttpAuthenticationSchemeAdapter {
 
         String sub = idTokenClaims.getSub();
 
-        // 9. Lookup or create user
-        SUser user = userModel.findUserAccount(null, username);
-        if (user != null) {
-            String existingSub = ((UserEx) user).getAttribute(OidcConstants.OIDC_SUB_ATTRIBUTE);
-            if (!sub.equals(existingSub) && TeamCityProperties.getBooleanOrTrue("teamcity.oidc.auth.emptySubAttr.applyEmailCheck")) {
-                // we found some user account by username, but they either never logged in with OIDC auth or the sub claim has been changed
-                // instead of simply allowing them to login we need to ensure that we can match the user by the verified email
-                if (email == null) {
-                    Loggers.AUTH.warn("OIDC: the user account is found by '" + username + "' but it was not created by the OIDC auth and there is no email claim available to match it by the verified email");
-                    throw new OidcAuthException("Cannot authenticate user with username '" + username + "' (ask system administrator for details)");
+        // Match only existing users. Serialize binding checks and writes within this
+        // server process so competing first callbacks cannot overwrite one another.
+        SUser user;
+        synchronized (userModel) {
+            user = userModel.findUserAccount(null, username);
+            if (user == null) {
+                throw new OidcAuthException("No matching TeamCity account; contact your administrator");
+            }
+            UserEx account = (UserEx) user;
+            String existingSub = account.getAttribute(OidcConstants.OIDC_SUB_ATTRIBUTE);
+            String existingIssuer = account.getAttribute(OidcConstants.OIDC_ISSUER_ATTRIBUTE);
+            if (existingSub != null || existingIssuer != null) {
+                if (!sub.equals(existingSub) || !settings.getIssuerUrl().equals(existingIssuer)) {
+                    throw new OidcAuthException("TeamCity account is linked to a different or incomplete OIDC identity");
                 }
-
-                if (!Boolean.TRUE.equals(idTokenClaims.getEmailVerified())) {
-                    Loggers.AUTH.warn("OIDC: the user account is found by '" + username + "' but it was not created by the OIDC auth and there is no verified email claim available");
-                    throw new OidcAuthException("Cannot authenticate user with username '" + username + "' (ask system administrator for details)");
-                }
-
-                String verifiedEmail = ((UserEx) user).getVerifiedEmail();
-                if (verifiedEmail == null) {
-                    Loggers.AUTH.warn("OIDC: the user account is found by '" + username + "' but it does not have a verified email");
-                    throw new OidcAuthException("Cannot authenticate user with username '" + username + "' (ask system administrator for details)");
-                }
-
-                if (!email.equals(verifiedEmail)) {
-                    Loggers.AUTH.warn("OIDC: the user account is found by '" + username + "' but its verified email '" + verifiedEmail + "' differs from the email claim: '" + email + "'");
-                    throw new OidcAuthException("Cannot authenticate user with username '" + username + "' (ask system administrator for details)");
-                }
+            } else {
+                account.setAttribute(OidcConstants.OIDC_ISSUER_ATTRIBUTE, settings.getIssuerUrl());
+                account.setAttribute(OidcConstants.OIDC_SUB_ATTRIBUTE, sub);
             }
         }
-
-        if (user == null && settings.isCreateUsersAutomatically()) {
-            Loggers.AUTH.warn("OIDC: creating a new user account with username '" + username + "'");
-            String displayName = resolveClaim(settings.getDisplayNameClaim(), idTokenClaims, userInfo);
-            user = userModel.createUserAccount(new NewUserAccount(username, displayName, email, null, Collections.emptyMap()));
-            if (email != null && Boolean.TRUE.equals(idTokenClaims.getEmailVerified())) {
-                ((UserEx)user).setEmailIsVerified(email);
-            }
-        }
-        if (user == null) {
-            throw new OidcAuthException("User '" + username + "' not found and automatic creation of users is disabled");
-        }
-
-        // 10. Group sync
-        if (settings.isAssignGroups()) {
-            List<String> groups = resolveGroups(settings, idTokenClaims, userInfo);
-            syncGroups(user, groups, settings.isRemoveUnassignedGroups());
-        }
-
-        ((UserEx) user).setAttribute(OidcConstants.OIDC_SUB_ATTRIBUTE, sub);
 
         // Store access token and user ID in session to support per-request token introspection
         // (OidcTokenIntrospectionInterceptor). Only stored when an access token was issued.
@@ -257,7 +235,7 @@ public class OidcAuthenticationScheme extends HttpAuthenticationSchemeAdapter {
         String redirectUrl = getPostLoginRedirect(session, request);
         return HttpAuthenticationResult.authenticated(
                 new ServerPrincipal(user.getRealm(), user.getUsername(), null,
-                        settings.isCreateUsersAutomatically(), new HashMap<>()),
+                        false, new HashMap<>()),
                 true).withRedirect(redirectUrl);
     }
 
@@ -315,11 +293,11 @@ public class OidcAuthenticationScheme extends HttpAuthenticationSchemeAdapter {
                 if (claimName == null || claimName.isEmpty()) return null;
                 // Try ID token first
                 Object value = claims.getRaw().get(claimName);
-                if (value != null) return value.toString();
+                if (value != null) return value instanceof String ? (String) value : null;
                 // Fall back to userinfo
                 if (userInfo != null) {
                     Object uiValue = userInfo.getRaw().get(claimName);
-                    if (uiValue != null) return uiValue.toString();
+                    if (uiValue instanceof String) return (String) uiValue;
                 }
                 return null;
             case NONE:
@@ -336,83 +314,6 @@ public class OidcAuthenticationScheme extends HttpAuthenticationSchemeAdapter {
                 .anyMatch(d -> d.toLowerCase(Locale.ROOT).equals(domain));
         if (!allowed) {
             throw new OidcAuthException("Email domain '" + domain + "' is not in the allowed domains list");
-        }
-    }
-
-    @NotNull
-    private List<String> resolveGroups(@NotNull OidcPluginSettings settings,
-                                       @NotNull OidcIdTokenClaims claims,
-                                       @Nullable OidcUserInfo userInfo) {
-        String claimName = settings.getGroupsClaimName();
-        Object raw = claims.getRaw().get(claimName);
-        if (raw == null && userInfo != null) raw = userInfo.getRaw().get(claimName);
-        if (raw == null) return Collections.emptyList();
-
-        if (raw instanceof List) {
-            @SuppressWarnings("unchecked")
-            List<Object> list = (List<Object>) raw;
-            return list.stream().filter(Objects::nonNull).map(Object::toString).map(this::extractGroupName).collect(Collectors.toList());
-        }
-        // Handle space- or comma-separated string
-        String str = raw.toString().trim();
-        if (str.isEmpty()) return Collections.emptyList();
-        return Arrays.stream(str.split("[,\\s]+"))
-                .map(String::trim)
-                .filter(s -> !s.isEmpty())
-                .map(this::extractGroupName)
-                .collect(Collectors.toList());
-    }
-
-    /**
-     * Extracts the leaf name from a group path.
-     * Keycloak includes groups as full paths (e.g. {@code /org/subteam/test_group});
-     * we only match against the last segment so TC group keys don't need to encode the full path.
-     */
-    @NotNull
-    private String extractGroupName(@NotNull String groupPath) {
-        int slash = groupPath.lastIndexOf('/');
-        return slash >= 0 ? groupPath.substring(slash + 1) : groupPath;
-    }
-
-    private void syncGroups(@NotNull SUser user, @NotNull List<String> idpGroups, boolean removeUnassigned) {
-        Map<String, SUserGroup> tcGroups = new HashMap<>();
-        for (SUserGroup g : userGroupManager.getUserGroups()) {
-            tcGroups.put(g.getKey().toLowerCase(Locale.ROOT), g);
-        }
-
-        Set<String> currentGroupKeys = user.getUserGroups().stream()
-                .filter(g -> !"ALL_USERS_GROUP".equals(g.getKey()))
-                .map(g -> g.getKey().toLowerCase(Locale.ROOT))
-                .collect(Collectors.toSet());
-
-        Set<String> idpGroupKeys = idpGroups.stream()
-                .map(s -> s.toLowerCase(Locale.ROOT))
-                .collect(Collectors.toSet());
-
-        // Add groups present in IdP claim but not yet assigned in TC
-        for (String key : idpGroupKeys) {
-            if (!currentGroupKeys.contains(key)) {
-                SUserGroup group = tcGroups.get(key);
-                if (group != null) {
-                    Loggers.AUTH.info("OIDC: adding user '" + user.getUsername() + "' to group '" + key + "'");
-                    group.addUser(user);
-                } else {
-                    Loggers.AUTH.debug("OIDC: no TC group found for IdP group key '" + key + "'");
-                }
-            }
-        }
-
-        // Optionally remove groups absent from IdP claim
-        if (removeUnassigned) {
-            for (String key : currentGroupKeys) {
-                if (!idpGroupKeys.contains(key)) {
-                    SUserGroup group = tcGroups.get(key);
-                    if (group != null) {
-                        Loggers.AUTH.info("OIDC: removing user '" + user.getUsername() + "' from group '" + key + "'");
-                        group.removeUser(user);
-                    }
-                }
-            }
         }
     }
 

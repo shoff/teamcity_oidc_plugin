@@ -91,12 +91,13 @@ public class OidcAuthenticationSchemeTest {
         when(validTokenResponse.getIdToken()).thenReturn("raw-id-token");
         when(validTokenResponse.getAccessToken()).thenReturn("access-token");
 
-        when(mockClient.exchangeCodeForTokens(anyString(), eq(CODE), anyString(), eq(CLIENT_ID), eq("secret")))
+        when(mockClient.exchangeCodeForTokens(anyString(), eq(CODE), anyString(), eq(CLIENT_ID), eq("secret"), eq("test-verifier")))
                 .thenReturn(validTokenResponse);
         when(mockValidator.validateAndDecode(anyString(), anyString(), eq(ISSUER), eq(CLIENT_ID), eq(NONCE), anyInt()))
                 .thenReturn(validClaims);
         when(mockStateManager.validateAndConsumeState(any(), eq(STATE))).thenReturn(true);
         when(mockStateManager.consumeNonce(any())).thenReturn(NONCE);
+        when(mockStateManager.consumeCodeVerifier(any())).thenReturn("test-verifier");
 
         scheme = new OidcAuthenticationScheme(
                 mock(LoginConfiguration.class), settingsStorage, mockClient, mockValidator,
@@ -115,6 +116,7 @@ public class OidcAuthenticationSchemeTest {
     public void existingUserIsAuthenticated() throws Exception {
         when(mockUserModel.findUserAccount(null, USERNAME)).thenReturn(mockUser);
         when(mockUser.getAttribute(OidcConstants.OIDC_SUB_ATTRIBUTE)).thenReturn("sub-123");
+        when(mockUser.getAttribute("oidc.issuer")).thenReturn(ISSUER);
         MockHttpServletResponse resp = new MockHttpServletResponse();
 
         HttpAuthenticationResult result = scheme.processAuthenticationRequest(callbackRequest(), resp, new HashMap<>());
@@ -123,55 +125,84 @@ public class OidcAuthenticationSchemeTest {
     }
 
     @Test
-    public void existingUserIsAuthenticatedFirstTime() throws Exception {
+    public void firstLoginMatchesUsernameWithoutVerifiedEmail() throws Exception {
         when(mockUserModel.findUserAccount(null, USERNAME)).thenReturn(mockUser);
+        assertEquals(HttpAuthenticationResult.Type.AUTHENTICATED,
+                scheme.processAuthenticationRequest(callbackRequest(), new MockHttpServletResponse(), new HashMap<>()).getType());
+        verify(mockUser).setAttribute("oidc.issuer", ISSUER);
+        verify(mockUser).setAttribute(OidcConstants.OIDC_SUB_ATTRIBUTE, "sub-123");
+    }
 
-        HttpAuthenticationResult result = scheme.processAuthenticationRequest(callbackRequest(), new MockHttpServletResponse(), new HashMap<>());
-        assertEquals(HttpAuthenticationResult.Type.UNAUTHENTICATED, result.getType());
-
-        when(mockUser.getVerifiedEmail()).thenReturn("some@dot.com");
-
-        result = scheme.processAuthenticationRequest(callbackRequest(), new MockHttpServletResponse(), new HashMap<>());
-        assertEquals(HttpAuthenticationResult.Type.UNAUTHENTICATED, result.getType());
-
+    @Test
+    public void differentSubjectCannotRelinkAccount() throws Exception {
+        when(mockUserModel.findUserAccount(null, USERNAME)).thenReturn(mockUser);
+        when(mockUser.getAttribute(OidcConstants.OIDC_SUB_ATTRIBUTE)).thenReturn("other-sub");
+        when(mockUser.getAttribute("oidc.issuer")).thenReturn(ISSUER);
         when(mockUser.getVerifiedEmail()).thenReturn(EMAIL);
+        assertRejected();
+        verify(mockUser, never()).setAttribute(anyString(), anyString());
+    }
 
-        // no email claim
-        Map<String, Object> rawClaims = new HashMap<>();
-        rawClaims.put("preferred_username", USERNAME);
-        rawClaims.put("name", "Test User");
-        OidcIdTokenClaims claims = new OidcIdTokenClaims(
-                ISSUER, "sub-123", Collections.singletonList(CLIENT_ID),
-                System.currentTimeMillis() / 1000 + 3600,
-                System.currentTimeMillis() / 1000 - 10,
-                NONCE, "", false, "Test User", USERNAME, rawClaims);
-        when(mockValidator.validateAndDecode(anyString(), anyString(), eq(ISSUER), eq(CLIENT_ID), eq(NONCE), anyInt()))
-                .thenReturn(claims);
+    @Test
+    public void differentIssuerCannotRelinkAccount() throws Exception {
+        when(mockUserModel.findUserAccount(null, USERNAME)).thenReturn(mockUser);
+        when(mockUser.getAttribute("oidc.issuer")).thenReturn("https://other.example.com");
+        assertRejected();
+    }
 
-        result = scheme.processAuthenticationRequest(callbackRequest(), new MockHttpServletResponse(), new HashMap<>());
-        assertEquals(HttpAuthenticationResult.Type.UNAUTHENTICATED, result.getType());
+    @Test
+    public void legacySubjectWithoutIssuerIsRejected() throws Exception {
+        when(mockUserModel.findUserAccount(null, USERNAME)).thenReturn(mockUser);
+        when(mockUser.getAttribute(OidcConstants.OIDC_SUB_ATTRIBUTE)).thenReturn("sub-123");
+        when(mockUser.getAttribute("oidc.issuer")).thenReturn(ISSUER);
+        when(mockUser.getAttribute("oidc.issuer")).thenReturn(null);
+        assertRejected();
+    }
 
-        // no verified email claim
-        rawClaims = new HashMap<>();
-        rawClaims.put("preferred_username", USERNAME);
-        rawClaims.put("name", "Test User");
-        rawClaims.put("email", EMAIL);
-        claims = new OidcIdTokenClaims(
-                ISSUER, "sub-123", Collections.singletonList(CLIENT_ID),
-                System.currentTimeMillis() / 1000 + 3600,
-                System.currentTimeMillis() / 1000 - 10,
-                NONCE, "EMAIL", false, "Test User", USERNAME, rawClaims);
-        when(mockValidator.validateAndDecode(anyString(), anyString(), eq(ISSUER), eq(CLIENT_ID), eq(NONCE), anyInt()))
-                .thenReturn(claims);
+    @Test
+    public void missingOrNonStringUsernameIsRejected() throws Exception {
+        when(mockUserModel.findUserAccount(null, USERNAME)).thenReturn(mockUser);
+        for (Object bad : Arrays.asList(null, "", " ", 123, Arrays.asList(USERNAME))) {
+            validClaims.getRaw().put("preferred_username", bad);
+            assertRejected();
+        }
+    }
 
-        result = scheme.processAuthenticationRequest(callbackRequest(), new MockHttpServletResponse(), new HashMap<>());
-        assertEquals(HttpAuthenticationResult.Type.UNAUTHENTICATED, result.getType());
+    @Test
+    public void missingSubjectIsRejected() throws Exception {
+        OidcIdTokenClaims noSub = new OidcIdTokenClaims(ISSUER, null, validClaims.getAud(),
+                validClaims.getExp(), validClaims.getIat(), NONCE, EMAIL, true,
+                "Test User", USERNAME, validClaims.getRaw());
+        when(mockValidator.validateAndDecode(anyString(), anyString(), eq(ISSUER), eq(CLIENT_ID), eq(NONCE), anyInt())).thenReturn(noSub);
+        when(mockUserModel.findUserAccount(null, USERNAME)).thenReturn(mockUser);
+        assertRejected();
+    }
 
-        when(mockValidator.validateAndDecode(anyString(), anyString(), eq(ISSUER), eq(CLIENT_ID), eq(NONCE), anyInt()))
-                .thenReturn(validClaims);
+    @Test
+    public void userInfoSubjectMismatchIsRejected() throws Exception {
+        settings.setUserInfoEndpoint("https://idp.example.com/userinfo");
+        OidcUserInfo info = new com.fasterxml.jackson.databind.ObjectMapper().readValue(
+                "{\"sub\":\"other-sub\",\"preferred_username\":\"testuser\"}", OidcUserInfo.class);
+        when(mockClient.fetchUserInfo(anyString(), anyString())).thenReturn(info);
+        when(mockUserModel.findUserAccount(null, USERNAME)).thenReturn(mockUser);
+        assertRejected();
+    }
 
-        result = scheme.processAuthenticationRequest(callbackRequest(), new MockHttpServletResponse(), new HashMap<>());
-        assertEquals(HttpAuthenticationResult.Type.AUTHENTICATED, result.getType());
+    @Test
+    public void standardUsernameFromUserInfoIsSupported() throws Exception {
+        settings.setUserInfoEndpoint("https://idp.example.com/userinfo");
+        validClaims.getRaw().remove("preferred_username");
+        OidcUserInfo info = new com.fasterxml.jackson.databind.ObjectMapper().readValue(
+                "{\"sub\":\"sub-123\",\"preferred_username\":\"testuser\"}", OidcUserInfo.class);
+        when(mockClient.fetchUserInfo(anyString(), anyString())).thenReturn(info);
+        when(mockUserModel.findUserAccount(null, USERNAME)).thenReturn(mockUser);
+        assertEquals(HttpAuthenticationResult.Type.AUTHENTICATED,
+                scheme.processAuthenticationRequest(callbackRequest(), new MockHttpServletResponse(), new HashMap<>()).getType());
+    }
+
+    private void assertRejected() throws Exception {
+        assertEquals(HttpAuthenticationResult.Type.UNAUTHENTICATED,
+                scheme.processAuthenticationRequest(callbackRequest(), new MockHttpServletResponse(), new HashMap<>()).getType());
     }
 
     @Test
@@ -186,20 +217,11 @@ public class OidcAuthenticationSchemeTest {
     }
 
     @Test
-    public void unknownUserWithAutoCreateEnabled_isCreated() throws Exception {
+    public void unknownUserWithLegacyAutoCreateEnabledIsRejected() throws Exception {
         settings.setCreateUsersAutomatically(true);
         when(mockUserModel.findUserAccount(null, USERNAME)).thenReturn(null);
-        when(mockUserModel.createUserAccount(any(NewUserAccount.class))).thenReturn(mockUser);
-
-        HttpAuthenticationResult result = scheme.processAuthenticationRequest(callbackRequest(), new MockHttpServletResponse(), new HashMap<>());
-
-        assertEquals(HttpAuthenticationResult.Type.AUTHENTICATED, result.getType());
-        verify(mockUserModel).createUserAccount(argThat(account ->
-                USERNAME.equals(account.getUsername())
-                        && "Test User".equals(account.getName())
-                        && EMAIL.equals(account.getEmail())));
-        verify(mockUser, never()).updateUserAccount(any(), any(), any());
-        verify(mockUser).setEmailIsVerified(EMAIL);
+        assertRejected();
+        verify(mockUserModel, never()).createUserAccount(any(NewUserAccount.class));
     }
 
     @Test
@@ -217,6 +239,7 @@ public class OidcAuthenticationSchemeTest {
         settings.setAllowedEmailDomains(Collections.singletonList("example.com"));
         when(mockUserModel.findUserAccount(null, USERNAME)).thenReturn(mockUser);
         when(mockUser.getAttribute(OidcConstants.OIDC_SUB_ATTRIBUTE)).thenReturn("sub-123");
+        when(mockUser.getAttribute("oidc.issuer")).thenReturn(ISSUER);
 
         HttpAuthenticationResult result = scheme.processAuthenticationRequest(callbackRequest(), new MockHttpServletResponse(), new HashMap<>());
 
@@ -228,6 +251,7 @@ public class OidcAuthenticationSchemeTest {
         settings.setAllowedEmailDomains(Collections.emptyList());
         when(mockUserModel.findUserAccount(null, USERNAME)).thenReturn(mockUser);
         when(mockUser.getAttribute(OidcConstants.OIDC_SUB_ATTRIBUTE)).thenReturn("sub-123");
+        when(mockUser.getAttribute("oidc.issuer")).thenReturn(ISSUER);
 
         HttpAuthenticationResult result = scheme.processAuthenticationRequest(callbackRequest(), new MockHttpServletResponse(), new HashMap<>());
 
@@ -265,7 +289,7 @@ public class OidcAuthenticationSchemeTest {
     }
 
     @Test
-    public void groupsAreAssignedFromClaims() throws Exception {
+    public void legacyGroupClaimsDoNotAssignGroups() throws Exception {
         settings.setAssignGroups(true);
         settings.setGroupsClaimName("groups");
 
@@ -287,15 +311,16 @@ public class OidcAuthenticationSchemeTest {
         when(mockGroupManager.getUserGroups()).thenReturn(Arrays.asList(devsGroup, adminGroup));
         when(mockUserModel.findUserAccount(null, USERNAME)).thenReturn(mockUser);
         when(mockUser.getAttribute(OidcConstants.OIDC_SUB_ATTRIBUTE)).thenReturn("sub-123");
+        when(mockUser.getAttribute("oidc.issuer")).thenReturn(ISSUER);
 
         scheme.processAuthenticationRequest(callbackRequest(), new MockHttpServletResponse(), new HashMap<>());
 
-        verify(devsGroup).addUser(mockUser);
-        verify(adminGroup).addUser(mockUser);
+        verify(devsGroup, never()).addUser(any());
+        verify(adminGroup, never()).addUser(any());
     }
 
     @Test
-    public void groupsAreRemovedWhenRemoveUnassignedEnabled() throws Exception {
+    public void legacyRemovalFlagDoesNotRemoveGroups() throws Exception {
         settings.setAssignGroups(true);
         settings.setRemoveUnassignedGroups(true);
         settings.setGroupsClaimName("groups");
@@ -310,10 +335,11 @@ public class OidcAuthenticationSchemeTest {
         when(mockUser.getUserGroups()).thenReturn(Collections.singletonList(existingGroup));
         when(mockUserModel.findUserAccount(null, USERNAME)).thenReturn(mockUser);
         when(mockUser.getAttribute(OidcConstants.OIDC_SUB_ATTRIBUTE)).thenReturn("sub-123");
+        when(mockUser.getAttribute("oidc.issuer")).thenReturn(ISSUER);
 
         scheme.processAuthenticationRequest(callbackRequest(), new MockHttpServletResponse(), new HashMap<>());
 
-        verify(existingGroup).removeUser(mockUser);
+        verify(existingGroup, never()).removeUser(any());
     }
 
     @Test
@@ -340,6 +366,7 @@ public class OidcAuthenticationSchemeTest {
         settings.setUsernameClaim(subMapping);
         when(mockUserModel.findUserAccount(null, "sub-123")).thenReturn(mockUser);
         when(mockUser.getAttribute(OidcConstants.OIDC_SUB_ATTRIBUTE)).thenReturn("sub-123");
+        when(mockUser.getAttribute("oidc.issuer")).thenReturn(ISSUER);
 
         HttpAuthenticationResult result = scheme.processAuthenticationRequest(callbackRequest(), new MockHttpServletResponse(), new HashMap<>());
 
@@ -359,11 +386,60 @@ public class OidcAuthenticationSchemeTest {
 
     @Test
     public void tokenExchangeFailure_isRejected() throws Exception {
-        when(mockClient.exchangeCodeForTokens(anyString(), eq(CODE), anyString(), eq(CLIENT_ID), eq("secret")))
+        when(mockClient.exchangeCodeForTokens(anyString(), eq(CODE), anyString(), eq(CLIENT_ID), eq("secret"), eq("test-verifier")))
                 .thenThrow(new OidcClientException("Network error"));
 
         HttpAuthenticationResult result = scheme.processAuthenticationRequest(callbackRequest(), new MockHttpServletResponse(), new HashMap<>());
 
         assertEquals(HttpAuthenticationResult.Type.UNAUTHENTICATED, result.getType());
     }
+    @Test
+    public void missingPkceVerifierIsRejectedBeforeTokenExchange() throws Exception {
+        when(mockStateManager.consumeCodeVerifier(any())).thenReturn(null);
+        assertRejected();
+        verifyNoInteractions(mockClient);
+    }
+
+    @Test
+    public void missingNonceIsRejectedBeforeTokenExchange() throws Exception {
+        when(mockStateManager.consumeNonce(any())).thenReturn(null);
+        assertRejected();
+        verifyNoInteractions(mockClient);
+    }
+
+    @Test
+    public void tokenExchangeReceivesSessionVerifier() throws Exception {
+        when(mockUserModel.findUserAccount(null, USERNAME)).thenReturn(mockUser);
+        assertEquals(HttpAuthenticationResult.Type.AUTHENTICATED,
+                scheme.processAuthenticationRequest(callbackRequest(), new MockHttpServletResponse(), new HashMap<>()).getType());
+        verify(mockClient).exchangeCodeForTokens(eq(settings.getTokenEndpoint()), eq(CODE),
+                anyString(), eq(CLIENT_ID), eq("secret"), eq("test-verifier"));
+    }
+
+    @Test
+    public void malformedUserInfoUsernameCannotBeCoercedIntoAnAccountName() throws Exception {
+        settings.setUserInfoEndpoint("https://idp.example.com/userinfo");
+        validClaims.getRaw().remove("preferred_username");
+        for (String jsonValue : Arrays.asList("123", "true", "[\"testuser\"]", "{\"name\":\"testuser\"}", "null")) {
+            OidcUserInfo info = new com.fasterxml.jackson.databind.ObjectMapper().readValue(
+                    "{\"sub\":\"sub-123\",\"preferred_username\":" + jsonValue + "}", OidcUserInfo.class);
+            when(mockClient.fetchUserInfo(anyString(), anyString())).thenReturn(info);
+            when(mockUserModel.findUserAccount(eq(null), anyString())).thenReturn(mockUser);
+            assertRejected();
+        }
+        verify(mockUserModel, never()).findUserAccount(any(), anyString());
+    }
+
+    @Test
+    public void configurableUserInfoStandardClaimMappingIsSupported() throws Exception {
+        settings.setUserInfoEndpoint("https://idp.example.com/userinfo");
+        settings.getUsernameClaim().setClaimName("given_name");
+        OidcUserInfo info = new com.fasterxml.jackson.databind.ObjectMapper().readValue(
+                "{\"sub\":\"sub-123\",\"given_name\":\"testuser\"}", OidcUserInfo.class);
+        when(mockClient.fetchUserInfo(anyString(), anyString())).thenReturn(info);
+        when(mockUserModel.findUserAccount(null, USERNAME)).thenReturn(mockUser);
+        assertEquals(HttpAuthenticationResult.Type.AUTHENTICATED,
+                scheme.processAuthenticationRequest(callbackRequest(), new MockHttpServletResponse(), new HashMap<>()).getType());
+    }
+
 }
